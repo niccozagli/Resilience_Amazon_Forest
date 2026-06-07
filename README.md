@@ -32,7 +32,3 @@ spatial structure.
   rainforest resilience since the early 2000s. *Nat. Clim. Change* 12, 271–278.
 - Zotta, R.-M. et al. (2024). VODCA v2. *Earth Syst. Sci. Data* 16, 4573–4617.
 
-## For AI coding agents
-
-See `AGENTS.md` for full project context, dataset specifications, analysis
-plan, and implementation constraints.

@@ -24,6 +24,9 @@ def compute_stl_components(
     mask: xr.DataArray | None = None,
     *,
     period: int = 12,
+    seasonal_window: int | str | None = "periodic",
+    trend_window: int | None = None,
+    low_pass_window: int | None = None,
     robust: bool = True,
 ) -> STLComponents:
     """Compute STL components independently for each complete grid cell.
@@ -37,6 +40,15 @@ def compute_stl_components(
         mask are returned as ``NaN`` in all components.
     period
         Seasonal period passed to :class:`statsmodels.tsa.seasonal.STL`.
+    seasonal_window
+        Seasonal smoother length passed to STL. Use ``"periodic"`` to
+        approximate R's ``stl(..., s.window = "periodic")`` by setting the
+        seasonal smoother longer than the full time series. Use ``None`` for
+        statsmodels' default.
+    trend_window
+        Optional trend smoother length passed to STL.
+    low_pass_window
+        Optional low-pass smoother length passed to STL.
     robust
         Whether to use robust STL fitting.
 
@@ -51,6 +63,13 @@ def compute_stl_components(
     if mask is not None:
         data = data.where(mask)
 
+    stl_kwargs = _stl_kwargs(
+        n_time=data.sizes["time"],
+        seasonal_window=seasonal_window,
+        trend_window=trend_window,
+        low_pass_window=low_pass_window,
+    )
+
     stacked = data.stack(cell=("lat", "lon")).transpose("time", "cell")
     complete_cell_mask_stacked = stacked.notnull().all("time")
     complete = stacked.where(complete_cell_mask_stacked, drop=True)
@@ -61,7 +80,7 @@ def compute_stl_components(
 
     for cell_index in range(complete.sizes["cell"]):
         cell_values = complete.isel(cell=cell_index).to_numpy()
-        fit = STL(cell_values, period=period, robust=robust).fit()
+        fit = STL(cell_values, period=period, robust=robust, **stl_kwargs).fit()
         trend_values[:, cell_index] = fit.trend
         seasonal_values[:, cell_index] = fit.seasonal
         residual_values[:, cell_index] = fit.resid
@@ -100,6 +119,41 @@ def _validate_gridded_time_series(data: xr.DataArray) -> None:
     if missing_dims:
         missing = ", ".join(sorted(missing_dims))
         raise ValueError(f"data must include dimensions: {missing}")
+
+
+def _stl_kwargs(
+    *,
+    n_time: int,
+    seasonal_window: int | str | None,
+    trend_window: int | None,
+    low_pass_window: int | None,
+) -> dict[str, int]:
+    kwargs = {}
+
+    if seasonal_window == "periodic":
+        kwargs["seasonal"] = _next_odd(n_time + 1)
+    elif seasonal_window is not None:
+        kwargs["seasonal"] = _validate_odd_window(seasonal_window, "seasonal_window")
+
+    if trend_window is not None:
+        kwargs["trend"] = _validate_odd_window(trend_window, "trend_window")
+
+    if low_pass_window is not None:
+        kwargs["low_pass"] = _validate_odd_window(low_pass_window, "low_pass_window")
+
+    return kwargs
+
+
+def _validate_odd_window(value: int | str, name: str) -> int:
+    if not isinstance(value, int):
+        raise TypeError(f"{name} must be an odd integer, None, or 'periodic'")
+    if value < 7 or value % 2 == 0:
+        raise ValueError(f"{name} must be an odd integer greater than or equal to 7")
+    return value
+
+
+def _next_odd(value: int) -> int:
+    return value if value % 2 else value + 1
 
 
 def _to_spatial_field(

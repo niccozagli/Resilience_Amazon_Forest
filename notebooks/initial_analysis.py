@@ -30,10 +30,17 @@ def _():
 def _():
     #### Hyper parameters
     stl_period = 12
+    stl_seasonal_window = "periodic"
     stl_robust = True
     threshold_BL = 80
     threshold_HLU = 0
-    return stl_period, stl_robust, threshold_BL, threshold_HLU
+    return (
+        stl_period,
+        stl_robust,
+        stl_seasonal_window,
+        threshold_BL,
+        threshold_HLU,
+    )
 
 
 @app.cell
@@ -278,11 +285,13 @@ def _(
     monthly_ds,
     stl_period,
     stl_robust,
+    stl_seasonal_window,
 ):
     stl_components = compute_stl_components(
         monthly_ds["VOD"],
         analysis_mask,
         period=stl_period,
+        seasonal_window=stl_seasonal_window,
         robust=stl_robust,
     )
     computed_stl_trend = stl_components.trend
@@ -299,10 +308,12 @@ def _(
     computed_stl_trend,
     monthly_ds,
 ):
+    SELECTED_CELL = 100
+
     _valid_cells = computed_stl_residuals.notnull().all("time").stack(
         cell=("lat", "lon")
     )
-    _selected_cell = _valid_cells.where(_valid_cells, drop=True).cell.isel(cell=50)
+    _selected_cell = _valid_cells.where(_valid_cells, drop=True).cell.isel(cell=SELECTED_CELL)
     selected_lat = float(_selected_cell["lat"])
     selected_lon = float(_selected_cell["lon"])
 
@@ -320,17 +331,6 @@ def _(
         selected_lon,
         stored_residual,
     )
-
-
-@app.cell
-def _(cell_timeseries, plt, selected_lat, selected_lon):
-    _fig, _ax = plt.subplots(figsize=(11, 4))
-    cell_timeseries.plot(ax=_ax)
-    _ax.set_title(f"VOD time series at lat={selected_lat:.3f}, lon={selected_lon:.3f}")
-    _ax.set_xlabel("decimal year")
-    _ax.set_ylabel("VOD")
-    _fig
-    return
 
 
 @app.cell
@@ -379,6 +379,11 @@ def _(cell_stl_residual, plt, selected_lat, selected_lon, stored_residual):
     _ax.set_ylabel("VOD residual")
     _ax.legend()
     _fig
+    return
+
+
+@app.cell
+def _():
     return
 
 
