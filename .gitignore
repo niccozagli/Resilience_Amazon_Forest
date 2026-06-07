@@ -12,3 +12,6 @@ wheels/
 # Not commited files
 references/*
 AGENTS.md
+
+# data
+data/*
