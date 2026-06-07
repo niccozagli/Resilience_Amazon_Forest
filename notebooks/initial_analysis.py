@@ -12,6 +12,7 @@ def _():
     from matplotlib.colors import BoundaryNorm, ListedColormap
     import matplotlib.pyplot as plt
     from amazon.preprocessing.stl import compute_stl_components
+    from amazon.resilience.ar1 import compute_ar1_tendency, compute_sliding_ar1
     import xarray as xr
 
     return (
@@ -20,6 +21,8 @@ def _():
         Path,
         ccrs,
         cfeature,
+        compute_ar1_tendency,
+        compute_sliding_ar1,
         compute_stl_components,
         plt,
         xr,
@@ -29,12 +32,16 @@ def _():
 @app.cell
 def _():
     #### Hyper parameters
+    ar1_step = 1
+    ar1_window = 60
     stl_period = 12
     stl_seasonal_window = "periodic"
     stl_robust = True
     threshold_BL = 80
     threshold_HLU = 0
     return (
+        ar1_step,
+        ar1_window,
         stl_period,
         stl_robust,
         stl_seasonal_window,
@@ -308,7 +315,7 @@ def _(
     computed_stl_trend,
     monthly_ds,
 ):
-    SELECTED_CELL = 100
+    SELECTED_CELL = 600
 
     _valid_cells = computed_stl_residuals.notnull().all("time").stack(
         cell=("lat", "lon")
@@ -378,6 +385,185 @@ def _(cell_stl_residual, plt, selected_lat, selected_lon, stored_residual):
     _ax.set_xlabel("decimal year")
     _ax.set_ylabel("VOD residual")
     _ax.legend()
+    _fig
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ### Resilience AR(1) analysis
+    """)
+    return
+
+
+@app.cell
+def _(
+    analysis_mask,
+    ar1_step,
+    ar1_window,
+    compute_sliding_ar1,
+    computed_stl_residuals,
+):
+    computed_ar1_ols = compute_sliding_ar1(
+        computed_stl_residuals,
+        analysis_mask,
+        window=ar1_window,
+        step=ar1_step,
+        method="ols",
+    )
+    computed_ar1_pearson = compute_sliding_ar1(
+        computed_stl_residuals,
+        analysis_mask,
+        window=ar1_window,
+        step=ar1_step,
+        method="pearson",
+    )
+    return computed_ar1_ols, computed_ar1_pearson
+
+
+@app.cell
+def _(
+    computed_ar1_ols,
+    computed_ar1_pearson,
+    monthly_ds,
+    plt,
+    selected_lat,
+    selected_lon,
+):
+    _cell_ar1_ols = computed_ar1_ols.sel(lat=selected_lat, lon=selected_lon)
+    _cell_ar1_pearson = computed_ar1_pearson.sel(lat=selected_lat, lon=selected_lon)
+    _stored_ar1 = monthly_ds["VOD AR(1)"].sel(lat=selected_lat, lon=selected_lon)
+
+    _fig, _ax = plt.subplots(figsize=(11, 4))
+    _cell_ar1_ols.plot(ax=_ax, label="Computed AR(1), OLS")
+    _cell_ar1_pearson.plot(ax=_ax, label="Computed AR(1), Pearson")
+    _stored_ar1.plot(ax=_ax, label="Stored VOD AR(1)", linestyle="--", alpha=0.8)
+    _ax.axhline(0, color="black", linewidth=0.8)
+    _ax.set_title(f"Sliding-window AR(1) at lat={selected_lat:.3f}, lon={selected_lon:.3f}")
+    _ax.set_xlabel("decimal year")
+    _ax.set_ylabel("AR(1)")
+    _ax.legend()
+    _fig
+    return
+
+
+@app.cell
+def _(analysis_mask, computed_ar1_ols, plt):
+    _fig, _ax = plt.subplots(figsize=(7, 4))
+    _masked_ar1 = computed_ar1_ols.where(cond=analysis_mask)
+    _mean_ar1 = _masked_ar1.mean(dim=("lat", "lon"))
+    _spatial_std_ar1 = _masked_ar1.std(dim=("lat", "lon"))
+
+    _mean_ar1.plot(x="time", ax=_ax, label="Mean AR(1), OLS") #type:ignore
+    (_mean_ar1 + _spatial_std_ar1).plot(
+        x="time",
+        ax=_ax,
+        color="grey",
+        linestyle="--",
+    ) #type:ignore
+    (_mean_ar1 - _spatial_std_ar1).plot(
+        x="time",
+        ax=_ax,
+        color="grey",
+        linestyle="--",
+    )#type:ignore
+    _ax.set_title("Spatial mean AR(1) with spatial standard-deviation envelope")
+    _ax.set_xlabel("decimal year")
+    _ax.set_ylabel("AR(1)")
+    _ax.grid(linestyle="--", alpha=0.4)
+    _ax.legend()
+    _ax.set_ylim()
+    _fig
+    return
+
+
+@app.cell
+def _(
+    analysis_mask,
+    ccrs,
+    cfeature,
+    compute_ar1_tendency,
+    computed_ar1_ols,
+    plt,
+):
+    computed_ar1_ols_tendency = compute_ar1_tendency(
+        computed_ar1_ols,
+        analysis_mask,
+    )
+    _masked_ar1_ols_tendency = computed_ar1_ols_tendency.where(analysis_mask)
+
+    _fig, _ax = plt.subplots(
+        figsize=(10, 7),
+        subplot_kw={"projection": ccrs.PlateCarree()},
+    )
+    _image = _masked_ar1_ols_tendency.plot(
+        ax=_ax,
+        x="lon",
+        y="lat",
+        transform=ccrs.PlateCarree(),
+        cmap="RdBu_r",
+        vmin=-1,
+        vmax=1,
+        add_colorbar=False,
+    ) #type:ignore
+    _ax.coastlines(resolution="50m", linewidth=0.8)
+    _ax.add_feature(cfeature.BORDERS, linewidth=0.6)
+    _gridlines = _ax.gridlines(
+        draw_labels=True,
+        linewidth=0.3,
+        color="0.5",
+        alpha=0.5,
+        linestyle="--",
+    )
+    _gridlines.top_labels = False
+    _gridlines.right_labels = False
+    _ax.set_title("Kendall tau tendency of AR(1), analysis mask")
+    _ax.set_xlabel("longitude")
+    _ax.set_ylabel("latitude")
+    _fig.colorbar(
+        _image,
+        ax=_ax,
+        orientation="horizontal",
+        label="Kendall tau",
+        shrink=0.85,
+        pad=0.08,
+    )
+    _fig
+    return (computed_ar1_ols_tendency,)
+
+
+@app.cell
+def _(analysis_mask, computed_ar1_ols_tendency, plt):
+    _fig, _ax = plt.subplots(figsize=(7, 4))
+
+    _ar1_tendency_values = (
+        computed_ar1_ols_tendency
+        .where(analysis_mask)
+        .stack(cell=("lat", "lon"))
+        .dropna("cell")
+        .to_numpy()
+    )
+
+    _counts, _bins, _patches = _ax.hist(
+        _ar1_tendency_values,
+        bins=15,
+        edgecolor="white",
+    )
+
+    _norm = plt.Normalize(vmin=-1, vmax=1)
+    _cmap = plt.get_cmap("RdBu_r")
+
+    for _bin_left, _bin_right, _patch in zip(_bins[:-1], _bins[1:], _patches):
+        _bin_center = 0.5 * (_bin_left + _bin_right)
+        _patch.set_facecolor(_cmap(_norm(_bin_center)))
+
+    _ax.axvline(0, color="black", linewidth=1)
+    _ax.set_xlabel("Kendall tau tendency")
+    _ax.set_ylabel("Number of grid cells")
+    _ax.set_title("Distribution of AR(1) tendency")
+    _ax.grid(linestyle="--", alpha=0.3)
+
     _fig
     return
 
