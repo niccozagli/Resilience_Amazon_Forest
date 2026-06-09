@@ -200,17 +200,17 @@ def _(
     ]
     _change_cmap = ListedColormap(
         [
-            "#ff0000",
-            "#ff4d4d",
-            "#ff8080",
-            "#ffb3b3",
-            "#ffe0e0",
+            "#4d0000",
+            "#7f0000",
+            "#b2182b",
+            "#d6604d",
+            "#f4a582",
             "#bdbdbd",
-            "#e0f0ff",
-            "#b3d9ff",
-            "#80bfff",
-            "#4da6ff",
-            "#008cff",
+            "#92c5de",
+            "#4393c3",
+            "#2166ac",
+            "#053061",
+            "#021a33",
         ]
     )
     _change_norm = BoundaryNorm(_boundaries, _change_cmap.N, clip=True)
@@ -253,6 +253,7 @@ def _(
         pad=0.08,
     )
     _fig
+
     return
 
 
@@ -315,7 +316,7 @@ def _(
     computed_stl_trend,
     monthly_ds,
 ):
-    SELECTED_CELL = 600
+    SELECTED_CELL = 100
 
     _valid_cells = computed_stl_residuals.notnull().all("time").stack(
         cell=("lat", "lon")
@@ -354,7 +355,7 @@ def _(
 
     cell_timeseries.plot(ax=_axes[0])
     _axes[0].set_title(
-        f"Python STL decomposition at lat={selected_lat:.3f}, lon={selected_lon:.3f}"
+        f"STL decomposition at lat={selected_lat:.3f}, lon={selected_lon:.3f}"
     )
     _axes[0].set_ylabel("VOD")
 
@@ -468,13 +469,14 @@ def _(analysis_mask, computed_ar1_ols, plt):
         color="grey",
         linestyle="--",
     )#type:ignore
-    _ax.set_title("Spatial mean AR(1) with spatial standard-deviation envelope")
+    _ax.set_title("Spatial mean AR(1) ")
     _ax.set_xlabel("decimal year")
     _ax.set_ylabel("AR(1)")
     _ax.grid(linestyle="--", alpha=0.4)
     _ax.legend()
     _ax.set_ylim()
     _fig
+
     return
 
 
@@ -518,7 +520,7 @@ def _(
     )
     _gridlines.top_labels = False
     _gridlines.right_labels = False
-    _ax.set_title("Kendall tau tendency of AR(1), analysis mask")
+    _ax.set_title("Kendall tau tendency of AR(1)")
     _ax.set_xlabel("longitude")
     _ax.set_ylabel("latitude")
     _fig.colorbar(
