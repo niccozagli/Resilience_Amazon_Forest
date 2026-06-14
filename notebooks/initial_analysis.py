@@ -29,7 +29,6 @@ def _():
         ccrs,
         cfeature,
         compute_ar1_tendency,
-        compute_eigenvalue_spectra,
         compute_sliding_ar1,
         compute_spatial_modes,
         compute_stl_components,
@@ -52,6 +51,7 @@ def _():
     koopman_window = 120
     koopman_store_matrices = True
     koopman_truncations = (10,20)
+    koopman_robustness_truncations = (5, 10, 15, 20, 25, 30)
     stl_period = 12
     stl_seasonal_window = "periodic"
     stl_robust = True
@@ -61,6 +61,7 @@ def _():
         ar1_step,
         ar1_window,
         koopman_lag,
+        koopman_robustness_truncations,
         koopman_sigma,
         koopman_step,
         koopman_store_matrices,
@@ -609,11 +610,12 @@ def _(
     koopman_sigma,
     koopman_step,
     koopman_store_matrices,
+    koopman_window,
 ):
     windowed_gram_tsvd = compute_windowed_gram_tsvd(
         computed_stl_residuals,
         analysis_mask,
-        window=120,
+        window=koopman_window,
         step=koopman_step,
         lag=koopman_lag,
         sigma=koopman_sigma,
@@ -908,179 +910,144 @@ def _(koopman_subdominant_eigenvalues, np, plt, xr):
     return
 
 
-@app.cell
-def _(koopman_subdominant_eigenvalues, np, plt, xr):
-    _continuous_time_subdominant = xr.apply_ufunc(
-        np.log,
-        koopman_subdominant_eigenvalues["subdominant_eigenvalue"],
-    )
-    _continuous_time_next = xr.apply_ufunc(
-        np.log,
-        koopman_subdominant_eigenvalues["next_eigenvalue"],
-    )
-    _subdominant_decay = _continuous_time_subdominant.real
-    _next_decay = _continuous_time_next.real
-    _subdominant_timescale = (-1 / _subdominant_decay).where(_subdominant_decay < 0)
-    _next_timescale = (-1 / _next_decay).where(_next_decay < 0)
-    _rank_styles = {"10": "-", "20": "--"}
-
-    _fig, _ax = plt.subplots(figsize=(9, 8),nrows=2,sharex=True)
-
-    for _rank, _line_style in _rank_styles.items():
-        _subdominant_decay.sel(truncation=_rank).plot(
-            ax=_ax[0],
-            x="time",
-            color="tab:blue",
-            linestyle=_line_style,
-            label=f"leading, rank {_rank}",
-        ) #type:ignore
-        _next_decay.sel(truncation=_rank).plot(
-            ax=_ax[0],
-            x="time",
-            color="tab:green",
-            linestyle=_line_style,
-            label=f"second, rank {_rank}",
-        ) #type:ignore
-
-        _subdominant_timescale.sel(truncation=_rank).plot(
-            ax=_ax[1],
-            x="time",
-            color="tab:blue",
-            linestyle=_line_style,
-            label=f"leading, rank {_rank}",
-        ) #type:ignore
-        _next_timescale.sel(truncation=_rank).plot(
-            ax=_ax[1],
-            x="time",
-            color="tab:green",
-            linestyle=_line_style,
-            label=f"second, rank {_rank}",
-        ) #type:ignore
-
-    _ax[0].set_title("Koopman eigenvalue robustness to TSVD truncation")
-    _ax[1].set_title("")
-    _ax[0].set_ylabel(r"Re(log(lambda)) [month$^{-1}$]",size=12)
-    _ax[0].grid(linestyle="--", alpha=0.3)
-    _ax[0].legend(title="TSVD")
-    _ax[1].set_xlabel("decimal year")
-    _ax[1].set_ylabel("Koopman timescale [months]",size=12)
-    _ax[1].grid(linestyle="--", alpha=0.3)
-    _ax[1].legend(title="TSVD")
-    _fig
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ### Robustness Section
+    """)
     return
 
 
 @app.cell
-def _(koopman_subdominant_eigenvalues, np, plt, xr):
-    _continuous_time_subdominant = xr.apply_ufunc(
-        np.log,
-        koopman_subdominant_eigenvalues["subdominant_eigenvalue"],
+def _(
+    compute_subdominant_eigenvalue_trajectory,
+    koopman_robustness_truncations,
+    windowed_gram_tsvd,
+):
+    koopman_truncation_robustness = compute_subdominant_eigenvalue_trajectory(
+        windowed_gram_tsvd,
+        truncations=koopman_robustness_truncations,
     )
-    _continuous_time_next = xr.apply_ufunc(
+    return (koopman_truncation_robustness,)
+
+
+@app.cell
+def _(koopman_truncation_robustness, np, plt, xr):
+    _continuous_time_leading = xr.apply_ufunc(
         np.log,
-        koopman_subdominant_eigenvalues["next_eigenvalue"],
+        koopman_truncation_robustness["subdominant_eigenvalue"],
     )
+    _leading_timescale = (-1 / _continuous_time_leading.real).where(
+        _continuous_time_leading.real < 0
+    )
+    _colors = plt.get_cmap("viridis")(
+        np.linspace(0.12, 0.88, _leading_timescale.sizes["truncation"])
+    )
+
+    _fig, _ax = plt.subplots(nrows=2, figsize=(9, 7), sharex=True)
+    for _color, _rank in zip(_colors, _leading_timescale["truncation"].to_numpy()):
+        _axis = _ax[0] if int(_rank) <= 15 else _ax[1]
+        _leading_timescale.sel(truncation=_rank).plot(
+            ax=_axis,
+            x="time",
+            color=_color,
+            label=f"rank {_rank}",
+        ) #type:ignore
+
+    _ax[0].set_title("Truncation robustness")
+    _ax[1].set_title("")
+    _ax[0].set_ylabel("Koopman timescale [months]")
+    _ax[1].set_xlabel(" time [year]")
+    _ax[1].set_ylabel("Koopman timescale [months]")
+    for _axis in _ax:
+        _axis.grid(linestyle="--", alpha=0.5)
+        _axis.legend()
+
+    _fig
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ### Window-Length Robustness
+    """)
+    return
+
+
+@app.cell
+def _(
+    analysis_mask,
+    compute_subdominant_eigenvalue_trajectory,
+    compute_windowed_gram_tsvd,
+    computed_stl_residuals,
+    koopman_lag,
+    koopman_sigma,
+    koopman_step,
+    xr,
+):
+    _window_length_years = (5, 6, 7, 8, 9, 10)
+    _rank = 10
+    _trajectories = []
+
+    for _years in _window_length_years:
+        _windowed_gram_tsvd = compute_windowed_gram_tsvd(
+            computed_stl_residuals,
+            analysis_mask,
+            window=_years * 12,
+            step=koopman_step,
+            lag=koopman_lag,
+            sigma=koopman_sigma,
+            store_matrices=True,
+        )
+        _trajectory = compute_subdominant_eigenvalue_trajectory(
+            _windowed_gram_tsvd,
+            truncations=(_rank,),
+        )
+        _leading_eigenvalue = (
+            _trajectory["subdominant_eigenvalue"]
+            .sel(truncation=str(_rank), drop=True)
+            .assign_coords(window_years=_years)
+            .expand_dims("window_years")
+        )
+        _trajectories.append(_leading_eigenvalue)
+
+    koopman_window_length_robustness = xr.concat(
+        _trajectories,
+        dim="window_years",
+        join="outer",
+    ).to_dataset(name="leading_eigenvalue")
+    return (koopman_window_length_robustness,)
+
+
+@app.cell
+def _(koopman_window_length_robustness, np, plt, xr):
+    _continuous_time_leading = xr.apply_ufunc(
+        np.log,
+        koopman_window_length_robustness["leading_eigenvalue"],
+    )
+    _leading_timescale = (-1 / _continuous_time_leading.real).where(
+        _continuous_time_leading.real < 0
+    )
+    _colors = plt.get_cmap("viridis")(
+        np.linspace(0.12, 0.88, _leading_timescale.sizes["window_years"])
+    )[::-1]
 
     _fig, _ax = plt.subplots(figsize=(9, 4))
-    _line_styles = ["-", "--", ":", "-."]
-    for _index, _truncation in enumerate(_continuous_time_subdominant["truncation"].to_numpy()):
-        _line_style = _line_styles[_index % len(_line_styles)]
-        _continuous_time_subdominant.sel(truncation=_truncation).imag.plot(
+    for _color, _years in zip(_colors, _leading_timescale["window_years"].to_numpy()):
+        _leading_timescale.sel(window_years=_years).plot(
             ax=_ax,
             x="time",
-            color="tab:blue",
-            linestyle=_line_style,
-            label=f"leading, rank {_truncation}",
-        ) #type:ignore
-        _continuous_time_next.sel(truncation=_truncation).imag.plot(
-            ax=_ax,
-            x="time",
-            color="tab:green",
-            linestyle=_line_style,
-            label=f"second, rank {_truncation}",
+            color=_color,
+            label=f"{int(_years)} years",
         ) #type:ignore
 
-    _ax.axhline(0, color="black", linewidth=0.8, linestyle="--")
-    _ax.set_title("Imaginary part of continuous-time KDMD eigenvalues")
-    _ax.set_xlabel("decimal year")
-    _ax.set_ylabel("Im(log(lambda)) [month^-1]")
-    _ax.grid(linestyle="--", alpha=0.3)
-    _ax.legend(title="TSVD")
-    _fig
-    return
+    _ax.set_title("Window-length robustness")
+    _ax.set_xlabel("time [year]")
+    _ax.set_ylabel("Koopman timescale [months]")
+    _ax.grid(linestyle="--", alpha=0.5)
+    _ax.legend(title="Window")
 
-
-@app.cell
-def _(compute_eigenvalue_spectra, koopman_truncations, windowed_gram_tsvd):
-    koopman_eigenvalue_spectra = compute_eigenvalue_spectra(
-        windowed_gram_tsvd,
-        truncations=koopman_truncations,
-    )
-    return (koopman_eigenvalue_spectra,)
-
-
-@app.cell
-def _(koopman_eigenvalue_spectra, np, plt):
-    _window_index = koopman_eigenvalue_spectra.sizes["time"] // 2
-    _spectra = koopman_eigenvalue_spectra["eigenvalue"].isel(time=_window_index)
-    _window_time = float(_spectra["time"])
-    _theta = np.linspace(0, 2 * np.pi, 256)
-
-    _fig, _ax = plt.subplots(figsize=(6, 6))
-    _ax.plot(np.cos(_theta), np.sin(_theta), color="0.7", linestyle="--", linewidth=1)
-
-    for _truncation in _spectra["truncation"].to_numpy():
-        _eigenvalues = _spectra.sel(truncation=_truncation).to_numpy()
-        _eigenvalues = _eigenvalues[np.isfinite(_eigenvalues)]
-        _ax.scatter(
-            _eigenvalues.real,
-            _eigenvalues.imag,
-            s=25,
-            alpha=0.75,
-            label=f"rank {_truncation}",
-        )
-
-    _ax.axhline(0, color="black", linewidth=0.8)
-    _ax.axvline(0, color="black", linewidth=0.8)
-    _ax.set_aspect("equal", adjustable="box")
-    _ax.set_title(f"KDMD eigenvalue spectrum at window end {_window_time:.1f}")
-    _ax.set_xlabel("Re(lambda)")
-    _ax.set_ylabel("Im(lambda)")
-    _ax.grid(linestyle="--", alpha=0.3)
-    _ax.legend(title="TSVD")
-    _fig
-    return
-
-
-@app.cell
-def _(koopman_eigenvalue_spectra, np, plt):
-    _window_index = koopman_eigenvalue_spectra.sizes["time"] -1 
-    _spectra = koopman_eigenvalue_spectra["eigenvalue"].isel(time=_window_index)
-    _window_time = float(_spectra["time"])
-    _theta = np.linspace(0, 2 * np.pi, 256)
-
-    _fig, _ax = plt.subplots(figsize=(6, 6))
-    _ax.plot(np.cos(_theta), np.sin(_theta), color="0.7", linestyle="--", linewidth=1)
-
-    for _truncation in _spectra["truncation"].to_numpy():
-        _eigenvalues = _spectra.sel(truncation=_truncation).to_numpy()
-        _eigenvalues = _eigenvalues[np.isfinite(_eigenvalues)]
-        _ax.scatter(
-            _eigenvalues.real,
-            _eigenvalues.imag,
-            s=25,
-            alpha=0.75,
-            label=f"rank {_truncation}",
-        )
-
-    _ax.axhline(0, color="black", linewidth=0.8)
-    _ax.axvline(0, color="black", linewidth=0.8)
-    _ax.set_aspect("equal", adjustable="box")
-    _ax.set_title(f"KDMD eigenvalue spectrum at window end {_window_time:.1f}")
-    _ax.set_xlabel("Re(lambda)")
-    _ax.set_ylabel("Im(lambda)")
-    _ax.grid(linestyle="--", alpha=0.3)
-    _ax.legend(title="TSVD")
     _fig
     return
 
