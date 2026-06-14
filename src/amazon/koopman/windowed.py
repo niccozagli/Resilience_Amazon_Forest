@@ -333,6 +333,7 @@ def compute_windowed_gram_tsvd(
     step: int = 1,
     lag: int = 1,
     sigma: float | Literal["median"] = "median",
+    sigma_scale: float = 1.0,
     store_matrices: bool = True,
 ) -> WindowedGramTSVD:
     """Compute Gaussian-kernel Gram matrices and full eigenspectra by window.
@@ -354,6 +355,9 @@ def compute_windowed_gram_tsvd(
     sigma
         Gaussian-kernel bandwidth. ``"median"`` uses the median pairwise
         snapshot distance inside each window.
+    sigma_scale
+        Multiplicative factor applied to the selected bandwidth. With
+        ``sigma="median"``, this scales each window's median bandwidth.
     store_matrices
         Whether to store full ``G = k(X, X)`` and ``A = k(Y, X)`` matrices for
         later truncation/Koopman solves.
@@ -365,6 +369,8 @@ def compute_windowed_gram_tsvd(
         Gram matrix, with window coordinates stored at the end month.
     """
     _validate_inputs(residuals, window, step, lag, sigma)
+    if sigma_scale <= 0:
+        raise ValueError("sigma_scale must be positive")
 
     if mask is not None:
         residuals = residuals.where(mask)
@@ -408,6 +414,7 @@ def compute_windowed_gram_tsvd(
             if sigma == "median"
             else float(sigma)
         )
+        sigma_value *= sigma_scale
         sigma_values[window_number] = sigma_value
 
         kernel = GaussianKernel(sigma=sigma_value)

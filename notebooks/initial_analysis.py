@@ -1052,6 +1052,93 @@ def _(koopman_window_length_robustness, np, plt, xr):
     return
 
 
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ### Kernel-Bandwidth Robustness
+    """)
+    return
+
+
+@app.cell
+def _(analysis_mask, computed_stl_residuals, koopman_lag, koopman_step, xr):
+    import importlib as _importlib
+    import amazon.koopman.windowed as _windowed
+
+    _windowed = _importlib.reload(_windowed)
+    _sigma_scales = (0.5, 0.75, 1.0, 1.25, 1.5)
+    _rank = 10
+    _window = 120
+    _trajectories = []
+
+    for _scale in _sigma_scales:
+        _windowed_gram_tsvd = _windowed.compute_windowed_gram_tsvd(
+            computed_stl_residuals,
+            analysis_mask,
+            window=_window,
+            step=koopman_step,
+            lag=koopman_lag,
+            sigma="median",
+            sigma_scale=_scale,
+            store_matrices=True,
+        )
+        _trajectory = _windowed.compute_subdominant_eigenvalue_trajectory(
+            _windowed_gram_tsvd,
+            truncations=(_rank,),
+        )
+        _leading_eigenvalue = (
+            _trajectory["subdominant_eigenvalue"]
+            .sel(truncation=str(_rank), drop=True)
+            .assign_coords(sigma_scale=_scale)
+            .expand_dims("sigma_scale")
+        )
+        _trajectories.append(_leading_eigenvalue)
+
+    koopman_sigma_robustness = xr.concat(
+        _trajectories,
+        dim="sigma_scale",
+        join="outer",
+    ).to_dataset(name="leading_eigenvalue")
+    return (koopman_sigma_robustness,)
+
+
+@app.cell
+def _(koopman_sigma_robustness, np, plt, xr):
+    _continuous_time_leading = xr.apply_ufunc(
+        np.log,
+        koopman_sigma_robustness["leading_eigenvalue"],
+    )
+    _leading_timescale = (-1 / _continuous_time_leading.real).where(
+        _continuous_time_leading.real < 0
+    )
+    _colors = plt.get_cmap("coolwarm")(
+        np.linspace(0.08, 0.92, _leading_timescale.sizes["sigma_scale"])
+    )
+
+    _fig, _ax = plt.subplots(figsize=(9, 4))
+    for _color, _scale in zip(_colors, _leading_timescale["sigma_scale"].to_numpy()):
+        _line_color = "black" if np.isclose(_scale, 1.0) else _color
+        _line_width = 2.0 if np.isclose(_scale, 1.0) else 1.2
+        _delta = int(round((_scale - 1.0) * 100))
+        _label = "median" if _delta == 0 else f"{_delta:+d}%"
+        _leading_timescale.sel(sigma_scale=_scale).plot(
+            ax=_ax,
+            x="time",
+            color=_line_color,
+            linewidth=_line_width,
+            label=_label,
+        ) #type:ignore
+
+    _ax.set_title("Kernel-bandwidth robustness")
+    _ax.set_xlabel("time [year]")
+    _ax.set_ylabel("Koopman timescale [months]")
+    _ax.grid(linestyle="--", alpha=0.5)
+    _ax.legend(title="Bandwidth")
+
+    _fig
+    return
+
+
 @app.cell
 def _():
     return
