@@ -1,6 +1,6 @@
 import marimo
 
-__generated_with = "0.23.6"
+__generated_with = "0.23.9"
 app = marimo.App(width="medium")
 
 
@@ -11,6 +11,13 @@ def _():
     import cartopy.feature as cfeature
     from matplotlib.colors import BoundaryNorm, ListedColormap
     import matplotlib.pyplot as plt
+    import numpy as np
+    from amazon.koopman.windowed import (
+        compute_eigenvalue_spectra,
+        compute_spatial_modes,
+        compute_subdominant_eigenvalue_trajectory,
+        compute_windowed_gram_tsvd,
+    )
     from amazon.preprocessing.stl import compute_stl_components
     from amazon.resilience.ar1 import compute_ar1_tendency, compute_sliding_ar1
     import xarray as xr
@@ -22,8 +29,13 @@ def _():
         ccrs,
         cfeature,
         compute_ar1_tendency,
+        compute_eigenvalue_spectra,
         compute_sliding_ar1,
+        compute_spatial_modes,
         compute_stl_components,
+        compute_subdominant_eigenvalue_trajectory,
+        compute_windowed_gram_tsvd,
+        np,
         plt,
         xr,
     )
@@ -34,6 +46,12 @@ def _():
     #### Hyper parameters
     ar1_step = 1
     ar1_window = 60
+    koopman_lag = 1
+    koopman_sigma = "median"
+    koopman_step = 1
+    koopman_window = 120
+    koopman_store_matrices = True
+    koopman_truncations = (10,20)
     stl_period = 12
     stl_seasonal_window = "periodic"
     stl_robust = True
@@ -42,6 +60,12 @@ def _():
     return (
         ar1_step,
         ar1_window,
+        koopman_lag,
+        koopman_sigma,
+        koopman_step,
+        koopman_store_matrices,
+        koopman_truncations,
+        koopman_window,
         stl_period,
         stl_robust,
         stl_seasonal_window,
@@ -253,7 +277,6 @@ def _(
         pad=0.08,
     )
     _fig
-
     return
 
 
@@ -476,7 +499,6 @@ def _(analysis_mask, computed_ar1_ols, plt):
     _ax.legend()
     _ax.set_ylim()
     _fig
-
     return
 
 
@@ -566,6 +588,499 @@ def _(analysis_mask, computed_ar1_ols_tendency, plt):
     _ax.set_title("Distribution of AR(1) tendency")
     _ax.grid(linestyle="--", alpha=0.3)
 
+    _fig
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ### Koopman moving-window Gram TSVD
+    """)
+    return
+
+
+@app.cell
+def _(
+    analysis_mask,
+    compute_windowed_gram_tsvd,
+    computed_stl_residuals,
+    koopman_lag,
+    koopman_sigma,
+    koopman_step,
+    koopman_store_matrices,
+):
+    windowed_gram_tsvd = compute_windowed_gram_tsvd(
+        computed_stl_residuals,
+        analysis_mask,
+        window=120,
+        step=koopman_step,
+        lag=koopman_lag,
+        sigma=koopman_sigma,
+        store_matrices=koopman_store_matrices,
+    )
+    return (windowed_gram_tsvd,)
+
+
+@app.cell
+def _(windowed_gram_tsvd):
+    windowed_gram_tsvd.gram_eigenvalues
+    return
+
+
+@app.cell
+def _(plt, windowed_gram_tsvd):
+    _eigenvalues = windowed_gram_tsvd.gram_eigenvalues
+    _window_indices = [0, _eigenvalues.sizes["time"] // 2, _eigenvalues.sizes["time"] - 1]
+
+    _fig, _ax = plt.subplots(figsize=(7, 4))
+    for _window_index in _window_indices:
+        _spectrum = _eigenvalues.isel(time=_window_index)
+        _label_time = float(_spectrum["time"])
+        _ax.semilogy(
+            _spectrum["mode"].to_numpy(),
+            _spectrum.to_numpy(),
+            marker=".",
+            label=f"{_label_time:.1f}",
+        )
+
+    _ax.set_title("Full kernel Gram spectra by moving window")
+    _ax.set_xlabel("TSVD mode")
+    _ax.set_ylabel("Gram eigenvalue")
+    _ax.grid(linestyle="--", alpha=0.3)
+    _ax.legend(title="window end")
+    _fig
+    return
+
+
+@app.cell
+def _(
+    analysis_mask,
+    compute_spatial_modes,
+    computed_stl_residuals,
+    koopman_lag,
+    koopman_window,
+    windowed_gram_tsvd,
+):
+    koopman_spatial_modes_rank10 = compute_spatial_modes(
+        computed_stl_residuals,
+        analysis_mask,
+        windowed_gram_tsvd,
+        window=koopman_window,
+        lag=koopman_lag,
+        rank=10,
+        eigenvalue_index=0,
+        window_indices=(0, -1),
+    )
+    koopman_spatial_mode_initial = koopman_spatial_modes_rank10.isel(window=0)
+    koopman_spatial_mode_final = koopman_spatial_modes_rank10.isel(window=-1)
+    return koopman_spatial_mode_final, koopman_spatial_mode_initial
+
+
+@app.cell
+def _(
+    BoundaryNorm,
+    ListedColormap,
+    ccrs,
+    cfeature,
+    koopman_spatial_mode_initial,
+    np,
+    plt,
+):
+    _mode_real = -koopman_spatial_mode_initial.real
+    _abs_limit = float(np.nanmax(np.abs(_mode_real.to_numpy())))
+    _boundaries = np.array(
+        [
+            -_abs_limit,
+            -0.65 * _abs_limit,
+            -0.45 * _abs_limit,
+            -0.25 * _abs_limit,
+            -0.08 * _abs_limit,
+            0.08 * _abs_limit,
+            0.25 * _abs_limit,
+            0.45 * _abs_limit,
+            0.65 * _abs_limit,
+            _abs_limit,
+        ]
+    )
+    _cmap = ListedColormap(
+        [
+            "#67000d",
+            "#a50f15",
+            "#cb181d",
+            "#ef3b2c",
+            "#bdbdbd",
+            "#9ecae1",
+            "#6baed6",
+            "#3182bd",
+            "#08519c",
+        ]
+    )
+    _norm = BoundaryNorm(_boundaries, _cmap.N, clip=True)
+
+    _fig, _ax = plt.subplots(
+        figsize=(7, 5),
+        subplot_kw={"projection": ccrs.PlateCarree()},
+    )
+    _image = _mode_real.plot(
+        ax=_ax,
+        x="lon",
+        y="lat",
+        transform=ccrs.PlateCarree(),
+        cmap=_cmap,
+        norm=_norm,
+        add_colorbar=False,
+    ) #type:ignore
+    _ax.coastlines(resolution="50m", linewidth=0.8)
+    _ax.add_feature(cfeature.BORDERS, linewidth=0.6)
+    _gridlines = _ax.gridlines(
+        draw_labels=True,
+        linewidth=0.3,
+        color="0.5",
+        alpha=0.5,
+        linestyle="--",
+    )
+    _gridlines.top_labels = False
+    _gridlines.right_labels = False
+    _ax.set_title("Leading Koopman mode, initial time")
+    _fig.colorbar(
+        _image,
+        ax=_ax,
+        orientation="horizontal",
+        label="",
+        boundaries=_boundaries,
+        ticks=_boundaries,
+        shrink=0.85,
+        pad=0.08,
+        format="%.3f",
+    )
+    _fig
+    return
+
+
+@app.cell
+def _(
+    BoundaryNorm,
+    ListedColormap,
+    ccrs,
+    cfeature,
+    koopman_spatial_mode_final,
+    np,
+    plt,
+):
+    _mode_real = -koopman_spatial_mode_final.real
+    _abs_limit = float(np.nanmax(np.abs(_mode_real.to_numpy())))
+    _boundaries = np.array(
+        [
+            -_abs_limit,
+            -0.65 * _abs_limit,
+            -0.45 * _abs_limit,
+            -0.25 * _abs_limit,
+            -0.08 * _abs_limit,
+            0.08 * _abs_limit,
+            0.25 * _abs_limit,
+            0.45 * _abs_limit,
+            0.65 * _abs_limit,
+            _abs_limit,
+        ]
+    )
+    _cmap = ListedColormap(
+        [
+            "#67000d",
+            "#a50f15",
+            "#cb181d",
+            "#ef3b2c",
+            "#bdbdbd",
+            "#9ecae1",
+            "#6baed6",
+            "#3182bd",
+            "#08519c",
+        ]
+    )
+    _norm = BoundaryNorm(_boundaries, _cmap.N, clip=True)
+
+    _fig, _ax = plt.subplots(
+        figsize=(7, 5),
+        subplot_kw={"projection": ccrs.PlateCarree()},
+    )
+    _image = _mode_real.plot(
+        ax=_ax,
+        x="lon",
+        y="lat",
+        transform=ccrs.PlateCarree(),
+        cmap=_cmap,
+        norm=_norm,
+        add_colorbar=False,
+    ) #type:ignore
+    _ax.coastlines(resolution="50m", linewidth=0.8)
+    _ax.add_feature(cfeature.BORDERS, linewidth=0.6)
+    _gridlines = _ax.gridlines(
+        draw_labels=True,
+        linewidth=0.3,
+        color="0.5",
+        alpha=0.5,
+        linestyle="--",
+    )
+    _gridlines.top_labels = False
+    _gridlines.right_labels = False
+    _ax.set_title("Leading Koopman mode, final window")
+    _fig.colorbar(
+        _image,
+        ax=_ax,
+        orientation="horizontal",
+        boundaries=_boundaries,
+        ticks=_boundaries,
+        shrink=0.85,
+        pad=0.08,
+        format="%.3f",
+    )
+    _fig
+    return
+
+
+@app.cell
+def _(
+    compute_subdominant_eigenvalue_trajectory,
+    koopman_truncations,
+    windowed_gram_tsvd,
+):
+    koopman_subdominant_eigenvalues = compute_subdominant_eigenvalue_trajectory(
+        windowed_gram_tsvd,
+        truncations=koopman_truncations,
+    )
+    return (koopman_subdominant_eigenvalues,)
+
+
+@app.cell
+def _(koopman_subdominant_eigenvalues, np, plt, xr):
+    _continuous_time_subdominant = xr.apply_ufunc(
+        np.log,
+        koopman_subdominant_eigenvalues["subdominant_eigenvalue"],
+    )
+    _continuous_time_next = xr.apply_ufunc(
+        np.log,
+        koopman_subdominant_eigenvalues["next_eigenvalue"],
+    )
+    _subdominant_decay = _continuous_time_subdominant.real
+    _next_decay = _continuous_time_next.real
+    _subdominant_timescale = (-1 / _subdominant_decay).where(_subdominant_decay < 0)
+    _next_timescale = (-1 / _next_decay).where(_next_decay < 0)
+    _rank = "10"
+
+    _fig, _ax = plt.subplots(figsize=(9, 8),nrows=2,sharex=True)
+
+    _subdominant_decay.sel(truncation=_rank).plot(
+        ax=_ax[0],
+        x="time",
+        color="tab:blue",
+        label="leading",
+    ) #type:ignore
+    _next_decay.sel(truncation=_rank).plot(
+        ax=_ax[0],
+        x="time",
+        color="tab:green",
+        label="second",
+    ) #type:ignore
+
+    _subdominant_timescale.sel(truncation=_rank).plot(
+        ax=_ax[1],
+        x="time",
+        color="tab:blue",
+        label="leading",
+    ) #type:ignore
+    _next_timescale.sel(truncation=_rank).plot(
+        ax=_ax[1],
+        x="time",
+        color="tab:green",
+        label="second",
+    ) #type:ignore
+    _ax[0].set_title("")
+    _ax[1].set_title("")
+    _ax[0].set_ylabel(r"$\lambda$",size=12)
+    _ax[0].grid(linestyle="--", alpha=0.3)
+    _ax[0].legend(
+    )
+    _ax[1].set_xlabel("decimal year")
+    _ax[1].set_ylabel("Koopman timescale [months]",size=12)
+    _ax[1].grid(linestyle="--", alpha=0.3)
+    _ax[1].legend()
+    _fig
+    return
+
+
+@app.cell
+def _(koopman_subdominant_eigenvalues, np, plt, xr):
+    _continuous_time_subdominant = xr.apply_ufunc(
+        np.log,
+        koopman_subdominant_eigenvalues["subdominant_eigenvalue"],
+    )
+    _continuous_time_next = xr.apply_ufunc(
+        np.log,
+        koopman_subdominant_eigenvalues["next_eigenvalue"],
+    )
+    _subdominant_decay = _continuous_time_subdominant.real
+    _next_decay = _continuous_time_next.real
+    _subdominant_timescale = (-1 / _subdominant_decay).where(_subdominant_decay < 0)
+    _next_timescale = (-1 / _next_decay).where(_next_decay < 0)
+    _rank_styles = {"10": "-", "20": "--"}
+
+    _fig, _ax = plt.subplots(figsize=(9, 8),nrows=2,sharex=True)
+
+    for _rank, _line_style in _rank_styles.items():
+        _subdominant_decay.sel(truncation=_rank).plot(
+            ax=_ax[0],
+            x="time",
+            color="tab:blue",
+            linestyle=_line_style,
+            label=f"leading, rank {_rank}",
+        ) #type:ignore
+        _next_decay.sel(truncation=_rank).plot(
+            ax=_ax[0],
+            x="time",
+            color="tab:green",
+            linestyle=_line_style,
+            label=f"second, rank {_rank}",
+        ) #type:ignore
+
+        _subdominant_timescale.sel(truncation=_rank).plot(
+            ax=_ax[1],
+            x="time",
+            color="tab:blue",
+            linestyle=_line_style,
+            label=f"leading, rank {_rank}",
+        ) #type:ignore
+        _next_timescale.sel(truncation=_rank).plot(
+            ax=_ax[1],
+            x="time",
+            color="tab:green",
+            linestyle=_line_style,
+            label=f"second, rank {_rank}",
+        ) #type:ignore
+
+    _ax[0].set_title("Koopman eigenvalue robustness to TSVD truncation")
+    _ax[1].set_title("")
+    _ax[0].set_ylabel(r"Re(log(lambda)) [month$^{-1}$]",size=12)
+    _ax[0].grid(linestyle="--", alpha=0.3)
+    _ax[0].legend(title="TSVD")
+    _ax[1].set_xlabel("decimal year")
+    _ax[1].set_ylabel("Koopman timescale [months]",size=12)
+    _ax[1].grid(linestyle="--", alpha=0.3)
+    _ax[1].legend(title="TSVD")
+    _fig
+    return
+
+
+@app.cell
+def _(koopman_subdominant_eigenvalues, np, plt, xr):
+    _continuous_time_subdominant = xr.apply_ufunc(
+        np.log,
+        koopman_subdominant_eigenvalues["subdominant_eigenvalue"],
+    )
+    _continuous_time_next = xr.apply_ufunc(
+        np.log,
+        koopman_subdominant_eigenvalues["next_eigenvalue"],
+    )
+
+    _fig, _ax = plt.subplots(figsize=(9, 4))
+    _line_styles = ["-", "--", ":", "-."]
+    for _index, _truncation in enumerate(_continuous_time_subdominant["truncation"].to_numpy()):
+        _line_style = _line_styles[_index % len(_line_styles)]
+        _continuous_time_subdominant.sel(truncation=_truncation).imag.plot(
+            ax=_ax,
+            x="time",
+            color="tab:blue",
+            linestyle=_line_style,
+            label=f"leading, rank {_truncation}",
+        ) #type:ignore
+        _continuous_time_next.sel(truncation=_truncation).imag.plot(
+            ax=_ax,
+            x="time",
+            color="tab:green",
+            linestyle=_line_style,
+            label=f"second, rank {_truncation}",
+        ) #type:ignore
+
+    _ax.axhline(0, color="black", linewidth=0.8, linestyle="--")
+    _ax.set_title("Imaginary part of continuous-time KDMD eigenvalues")
+    _ax.set_xlabel("decimal year")
+    _ax.set_ylabel("Im(log(lambda)) [month^-1]")
+    _ax.grid(linestyle="--", alpha=0.3)
+    _ax.legend(title="TSVD")
+    _fig
+    return
+
+
+@app.cell
+def _(compute_eigenvalue_spectra, koopman_truncations, windowed_gram_tsvd):
+    koopman_eigenvalue_spectra = compute_eigenvalue_spectra(
+        windowed_gram_tsvd,
+        truncations=koopman_truncations,
+    )
+    return (koopman_eigenvalue_spectra,)
+
+
+@app.cell
+def _(koopman_eigenvalue_spectra, np, plt):
+    _window_index = koopman_eigenvalue_spectra.sizes["time"] // 2
+    _spectra = koopman_eigenvalue_spectra["eigenvalue"].isel(time=_window_index)
+    _window_time = float(_spectra["time"])
+    _theta = np.linspace(0, 2 * np.pi, 256)
+
+    _fig, _ax = plt.subplots(figsize=(6, 6))
+    _ax.plot(np.cos(_theta), np.sin(_theta), color="0.7", linestyle="--", linewidth=1)
+
+    for _truncation in _spectra["truncation"].to_numpy():
+        _eigenvalues = _spectra.sel(truncation=_truncation).to_numpy()
+        _eigenvalues = _eigenvalues[np.isfinite(_eigenvalues)]
+        _ax.scatter(
+            _eigenvalues.real,
+            _eigenvalues.imag,
+            s=25,
+            alpha=0.75,
+            label=f"rank {_truncation}",
+        )
+
+    _ax.axhline(0, color="black", linewidth=0.8)
+    _ax.axvline(0, color="black", linewidth=0.8)
+    _ax.set_aspect("equal", adjustable="box")
+    _ax.set_title(f"KDMD eigenvalue spectrum at window end {_window_time:.1f}")
+    _ax.set_xlabel("Re(lambda)")
+    _ax.set_ylabel("Im(lambda)")
+    _ax.grid(linestyle="--", alpha=0.3)
+    _ax.legend(title="TSVD")
+    _fig
+    return
+
+
+@app.cell
+def _(koopman_eigenvalue_spectra, np, plt):
+    _window_index = koopman_eigenvalue_spectra.sizes["time"] -1 
+    _spectra = koopman_eigenvalue_spectra["eigenvalue"].isel(time=_window_index)
+    _window_time = float(_spectra["time"])
+    _theta = np.linspace(0, 2 * np.pi, 256)
+
+    _fig, _ax = plt.subplots(figsize=(6, 6))
+    _ax.plot(np.cos(_theta), np.sin(_theta), color="0.7", linestyle="--", linewidth=1)
+
+    for _truncation in _spectra["truncation"].to_numpy():
+        _eigenvalues = _spectra.sel(truncation=_truncation).to_numpy()
+        _eigenvalues = _eigenvalues[np.isfinite(_eigenvalues)]
+        _ax.scatter(
+            _eigenvalues.real,
+            _eigenvalues.imag,
+            s=25,
+            alpha=0.75,
+            label=f"rank {_truncation}",
+        )
+
+    _ax.axhline(0, color="black", linewidth=0.8)
+    _ax.axvline(0, color="black", linewidth=0.8)
+    _ax.set_aspect("equal", adjustable="box")
+    _ax.set_title(f"KDMD eigenvalue spectrum at window end {_window_time:.1f}")
+    _ax.set_xlabel("Re(lambda)")
+    _ax.set_ylabel("Im(lambda)")
+    _ax.grid(linestyle="--", alpha=0.3)
+    _ax.legend(title="TSVD")
     _fig
     return
 
